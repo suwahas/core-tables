@@ -20,6 +20,9 @@
 
   // --- PRIVATE HELPER FUNCTIONS ---
 
+  /**
+   * Debounces a function to limit the rate at which it gets called.
+   */
   function debounce(func, delay) {
     let timeout;
     return function(...args) {
@@ -29,9 +32,25 @@
     };
   }
 
+  /**
+   * The starting point. Handles dynamic column loading if configured.
+   */
   function initializeTable(container, options) {
     if (options.ajax.columnsUrl) {
-      J.ajax({ url: options.ajax.columnsUrl, method: 'GET' })
+      // Prepare custom data for the columns request, if any
+      let columnsRequestData = {};
+      const userColumnsData = options.ajax.columnsData;
+      if (typeof userColumnsData === 'function') {
+        userColumnsData(columnsRequestData); // Call user function to populate data
+      } else if (typeof userColumnsData === 'object' && userColumnsData !== null) {
+        Object.assign(columnsRequestData, userColumnsData);
+      }
+
+      J.ajax({
+          url: options.ajax.columnsUrl,
+          method: options.ajax.method || 'GET',
+          data: columnsRequestData
+        })
         .then(columns => {
           options.columns = columns;
           setupTableDOM(container, options);
@@ -49,6 +68,9 @@
     }
   }
 
+  /**
+   * Builds the static HTML structure of the table (header, footer, etc.).
+   */
   function setupTableDOM(container, options) {
     const cn = options.classNames;
     container.empty().addClass(cn.container);
@@ -59,7 +81,7 @@
     const tableWrapper = J('<div>').addClass(cn.tableWrapper);
     const table = J('<table>').addClass(cn.table).appendTo(tableWrapper);
     const thead = J('<thead>').appendTo(table);
-    J('<tbody>').appendTo(table); // Append empty tbody
+    J('<tbody>').appendTo(table);
 
     const headerRow = J('<tr>').appendTo(thead);
     options.columns.forEach((col, index) => {
@@ -80,6 +102,9 @@
     wireUpEventListeners(container, options);
   }
   
+  /**
+   * Attaches all event listeners for sorting, searching, and pagination.
+   */
   function wireUpEventListeners(container, options) {
     const cn = options.classNames;
 
@@ -122,14 +147,17 @@
     }
   }
 
+  /**
+   * The core AJAX engine. Fetches data from the server based on the current state and custom data.
+   */
   function fetchData(container, options) {
     const cn = options.classNames;
     const state = JSON.parse(container.data('coreTableState'));
     const tbody = container.find('tbody');
-    
+
     tbody.html(`<tr><td colspan="${options.columns.length}">Loading...</td></tr>`);
-    
-    const requestData = {
+
+    let requestData = {
       draw: Date.now(),
       start: state.currentPage * state.pageLength,
       length: state.pageLength,
@@ -137,31 +165,36 @@
       'order[0][column]': state.sort.columnIndex,
       'order[0][dir]': state.sort.direction,
     };
-    
+
     options.columns.forEach((col, index) => {
       requestData[`columns[${index}][data]`] = col.data;
     });
 
+    const userData = options.ajax.data;
+    if (typeof userData === 'function') {
+      userData(requestData);
+    } else if (typeof userData === 'object' && userData !== null) {
+      Object.assign(requestData, userData);
+    }
+
     J.ajax({
-      url: options.ajax.url,
-      method: options.ajax.method || 'GET',
-      data: requestData
-    })
-    .then(response => {
-      renderTableBody(container, options, response.data);
-      if (options.paging) renderPagingControls(container, options, state, response);
-      if (options.ordering) renderHeaderSortUI(container, options, state);
-    })
-    .catch(err => {
-      tbody.html(`<tr><td colspan="${options.columns.length}" class="${cn.error}">Error loading data.</td></tr>`);
-      console.error("CoreTables AJAX Error:", err);
-    });
+        url: options.ajax.url,
+        method: options.ajax.method || 'GET',
+        data: requestData
+      })
+      .then(response => {
+        renderTableBody(container, options, response.data);
+        if (options.paging) renderPagingControls(container, options, state, response);
+        if (options.ordering) renderHeaderSortUI(container, options, state);
+      })
+      .catch(err => {
+        tbody.html(`<tr><td colspan="${options.columns.length}" class="${cn.error}">Error loading data.</td></tr>`);
+        console.error("CoreTables AJAX Error:", err);
+      });
   }
 
   /**
-   * Renders the table body efficiently by creating an array of row elements in memory
-   * and appending them to the DOM in a single operation, leveraging core.js's
-   * internal DocumentFragment handling.
+   * Renders the table body efficiently using an in-memory array of rows.
    */
   function renderTableBody(container, options, data) {
     const tbody = container.find('tbody');
@@ -172,23 +205,21 @@
       return;
     }
 
-    // 1. Use .map() to create an array of raw <tr> DOM elements in memory.
     const rows = data.map(rowObject => {
       const tr = J('<tr>');
       options.columns.forEach(column => {
         const cellData = rowObject[column.data] || '';
-        // Create TD and append it to the TR. core.js handles the fragment caching internally for this.
         tr.append(J('<td>').html(cellData));
       });
-      return tr[0]; // Return the raw DOM element for the array.
+      return tr[0];
     });
 
-    // 2. Pass the entire array of <tr> elements to tbody.append().
-    // Your core.js library will efficiently turn this array into a DocumentFragment
-    // and append all rows in a single DOM manipulation.
     tbody.append(rows);
   }
 
+  /**
+   * Renders the "Showing X to Y of Z" info and pagination buttons.
+   */
   function renderPagingControls(container, options, state, response) {
     const cn = options.classNames;
     const { recordsFiltered } = response;
@@ -209,6 +240,9 @@
     pagingContainer.append(prevButton).append(nextButton);
   }
 
+  /**
+   * Updates table headers to show the current sort direction (asc/desc classes).
+   */
   function renderHeaderSortUI(container, options, state) {
     const cn = options.classNames;
     container.find(`th.${cn.sortable}`).each(function() {
@@ -224,7 +258,13 @@
 
   J.fn.coreTable = function(userOptions = {}) {
     const defaults = {
-      ajax: { url: '', method: 'GET', columnsUrl: null },
+      ajax: {
+        url: '',
+        method: 'GET',
+        columnsUrl: null,
+        data: null,
+        columnsData: null
+      },
       columns: [],
       paging: true,
       searching: true,
@@ -255,14 +295,17 @@
       const container = J(this);
       if (container.data('coreTableState')) return;
 
+      const firstSortableColumnIndex = options.columns.findIndex(c => c.orderable !== false);
       const state = {
         currentPage: 0,
         pageLength: options.pageLength,
         searchTerm: '',
-        sort: { columnIndex: options.columns.findIndex(c => c.orderable !== false), direction: 'asc' }
+        sort: {
+          columnIndex: firstSortableColumnIndex !== -1 ? firstSortableColumnIndex : 0,
+          direction: 'asc'
+        }
       };
-      if (state.sort.columnIndex === -1) state.sort.columnIndex = 0; // fallback
-
+      
       container.data('coreTableState', JSON.stringify(state));
       initializeTable(container, options);
     });
