@@ -1,8 +1,10 @@
 /**
  * CoreTables Plugin
  * A powerful, server-side datatable plugin for the core.js (J) library.
+ * It handles AJAX-driven data, sorting, searching, and pagination with configurable class names.
+ * This version is optimized to use core.js's internal fragment caching for efficient rendering.
  *
- * @version 2.3.1
+ * @version 2.1.0
  * @plugin-name coreTable
  * @author https://github.com/suwahas
  * @requires core.js
@@ -31,28 +33,39 @@
   }
 
   /**
-   * Final step of initialization. Creates state, builds DOM, and fetches initial data.
-   * This is called only when the column definitions are ready.
+   * The starting point. Handles dynamic column loading if configured.
    */
-  function completeInitialization(container, options) {
-    // Filter columns based on the 'visible' property, if it exists
-    options.columns = options.columns.filter(col => col.visible !== false);
-      
-    // Create the initial state now that we have the final columns
-    const firstSortableColumnIndex = options.columns.findIndex(c => c.orderable !== false);
-    const state = {
-      currentPage: 0,
-      pageLength: options.pageLength,
-      searchTerm: '',
-      sort: {
-        columnIndex: firstSortableColumnIndex !== -1 ? firstSortableColumnIndex : 0,
-        direction: 'asc'
+  function initializeTable(container, options) {
+    if (options.ajax.columnsUrl) {
+      // Prepare custom data for the columns request, if any
+      let columnsRequestData = {};
+      const userColumnsData = options.ajax.columnsData;
+      if (typeof userColumnsData === 'function') {
+        userColumnsData(columnsRequestData); // Call user function to populate data
+      } else if (typeof userColumnsData === 'object' && userColumnsData !== null) {
+        Object.assign(columnsRequestData, userColumnsData);
       }
-    };
-    container.data('coreTableState', JSON.stringify(state));
 
-    setupTableDOM(container, options);
-    fetchData(container, options);
+      J.ajax({
+          url: options.ajax.columnsUrl,
+          method: options.ajax.method || 'GET',
+          data: columnsRequestData
+        })
+        .then(columns => {
+          options.columns = columns;
+          setupTableDOM(container, options);
+          fetchData(container, options);
+        })
+        .catch(err => {
+          container.html(`<div class="${options.classNames.error}">Error: Could not load column definitions.</div>`);
+          console.error('CoreTables Error:', err);
+        });
+    } else if (options.columns && options.columns.length > 0) {
+      setupTableDOM(container, options);
+      fetchData(container, options);
+    } else {
+      container.html(`<div class="${options.classNames.error}">Error: No columns defined.</div>`);
+    }
   }
 
   /**
@@ -88,7 +101,7 @@
     container.append(searchControl).append(tableWrapper).append(footer);
     wireUpEventListeners(container, options);
   }
-
+  
   /**
    * Attaches all event listeners for sorting, searching, and pagination.
    */
@@ -138,25 +151,24 @@
    * The core AJAX engine. Fetches data from the server based on the current state and custom data.
    */
   function fetchData(container, options) {
+    const cn = options.classNames;
     const state = JSON.parse(container.data('coreTableState'));
     const tbody = container.find('tbody');
-    const colspan = options.columns.length || 1;
 
-    tbody.html(`<tr><td colspan="${colspan}">Loading...</td></tr>`);
+    tbody.html(`<tr><td colspan="${options.columns.length}">Loading...</td></tr>`);
 
     let requestData = {
       draw: Date.now(),
       start: state.currentPage * state.pageLength,
       length: state.pageLength,
       'search[value]': state.searchTerm,
+      'order[0][column]': state.sort.columnIndex,
+      'order[0][dir]': state.sort.direction,
     };
 
-    // Add sort info only if ordering is enabled and a valid column exists
-    if(options.ordering && options.columns[state.sort.columnIndex]) {
-        const sortColumnName = options.columns[state.sort.columnIndex].data;
-        requestData['order[0][column]'] = sortColumnName; // Send column data property name
-        requestData['order[0][dir]'] = state.sort.direction;
-    }
+    options.columns.forEach((col, index) => {
+      requestData[`columns[${index}][data]`] = col.data;
+    });
 
     const userData = options.ajax.data;
     if (typeof userData === 'function') {
@@ -171,14 +183,12 @@
         data: requestData
       })
       .then(response => {
-        // Ensure response format is correct
-        const responseData = Array.isArray(response.data) ? response.data : [];
-        renderTableBody(container, options, responseData);
+        renderTableBody(container, options, response.data);
         if (options.paging) renderPagingControls(container, options, state, response);
         if (options.ordering) renderHeaderSortUI(container, options, state);
       })
       .catch(err => {
-        tbody.html(`<tr><td colspan="${colspan}" class="${options.classNames.error}">Error loading data.</td></tr>`);
+        tbody.html(`<tr><td colspan="${options.columns.length}" class="${cn.error}">Error loading data.</td></tr>`);
         console.error("CoreTables AJAX Error:", err);
       });
   }
@@ -189,10 +199,9 @@
   function renderTableBody(container, options, data) {
     const tbody = container.find('tbody');
     tbody.empty();
-    const colspan = options.columns.length || 1;
 
     if (data.length === 0) {
-      tbody.html(`<tr><td colspan="${colspan}">No matching records found</td></tr>`);
+      tbody.html(`<tr><td colspan="${options.columns.length}">No matching records found</td></tr>`);
       return;
     }
 
@@ -213,7 +222,7 @@
    */
   function renderPagingControls(container, options, state, response) {
     const cn = options.classNames;
-    const recordsFiltered = response.recordsFiltered || 0;
+    const { recordsFiltered } = response;
     const startRecord = recordsFiltered === 0 ? 0 : (state.currentPage * state.pageLength + 1);
     const endRecord = Math.min(startRecord + state.pageLength - 1, recordsFiltered);
 
@@ -286,34 +295,19 @@
       const container = J(this);
       if (container.data('coreTableState')) return;
 
-      if (options.ajax.columnsUrl) {
-        // --- DYNAMIC COLUMNS PATH ---
-        let columnsRequestData = {};
-        const userColumnsData = options.ajax.columnsData;
-        if (typeof userColumnsData === 'function') {
-          userColumnsData(columnsRequestData);
-        } else if (typeof userColumnsData === 'object' && userColumnsData !== null) {
-          Object.assign(columnsRequestData, userColumnsData);
+      const firstSortableColumnIndex = options.columns.findIndex(c => c.orderable !== false);
+      const state = {
+        currentPage: 0,
+        pageLength: options.pageLength,
+        searchTerm: '',
+        sort: {
+          columnIndex: firstSortableColumnIndex !== -1 ? firstSortableColumnIndex : 0,
+          direction: 'asc'
         }
-
-        J.ajax({
-          url: options.ajax.columnsUrl,
-          method: options.ajax.method || 'GET',
-          data: columnsRequestData
-        })
-        .then(columns => {
-          options.columns = Array.isArray(columns) ? columns : [];
-          // Now that columns are loaded, complete the setup
-          completeInitialization(container, options);
-        })
-        .catch(err => {
-          container.html(`<div class="${options.classNames.error}">Error: Could not load column definitions.</div>`);
-          console.error('CoreTables Error:', err);
-        });
-      } else {
-        // --- STATIC COLUMNS PATH ---
-        completeInitialization(container, options);
-      }
+      };
+      
+      container.data('coreTableState', JSON.stringify(state));
+      initializeTable(container, options);
     });
   };
 
