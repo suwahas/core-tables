@@ -18,6 +18,9 @@
 
   // --- PRIVATE HELPER FUNCTIONS ---
 
+  /**
+   * Debounces a function to limit the rate at which it gets called.
+   */
   function debounce(func, delay) {
     let timeout;
     return function(...args) {
@@ -87,6 +90,51 @@
   }
 
   /**
+   * Attaches all event listeners for sorting, searching, and pagination.
+   */
+  function wireUpEventListeners(container, options) {
+    const cn = options.classNames;
+
+    if (options.ordering) {
+      container.on('click', `th.${cn.sortable}`, function() {
+        const columnIndex = parseInt(J(this).data('columnIndex'));
+        const state = JSON.parse(container.data('coreTableState'));
+        if (state.sort.columnIndex === columnIndex) {
+          state.sort.direction = state.sort.direction === 'asc' ? 'desc' : 'asc';
+        } else {
+          state.sort.columnIndex = columnIndex;
+          state.sort.direction = 'asc';
+        }
+        container.data('coreTableState', JSON.stringify(state));
+        fetchData(container, options);
+      });
+    }
+
+    if (options.searching) {
+      const debouncedSearch = debounce(function() {
+        const state = JSON.parse(container.data('coreTableState'));
+        state.searchTerm = this.value;
+        state.currentPage = 0;
+        container.data('coreTableState', JSON.stringify(state));
+        fetchData(container, options);
+      }, 400);
+      container.on('keyup', `.${cn.search} input`, debouncedSearch);
+    }
+
+    if (options.paging) {
+      container.on('click', `.${cn.paginateBtn}`, function() {
+        const button = J(this);
+        if (button.hasClass(cn.disabled)) return;
+        const state = JSON.parse(container.data('coreTableState'));
+        if (button.data('page') === 'next') state.currentPage++;
+        else if (button.data('page') === 'previous') state.currentPage--;
+        container.data('coreTableState', JSON.stringify(state));
+        fetchData(container, options);
+      });
+    }
+  }
+
+  /**
    * The core AJAX engine. Fetches data from the server based on the current state and custom data.
    */
   function fetchData(container, options) {
@@ -106,7 +154,7 @@
     // Add sort info only if ordering is enabled and a valid column exists
     if(options.ordering && options.columns[state.sort.columnIndex]) {
         const sortColumnName = options.columns[state.sort.columnIndex].data;
-        requestData['order[0][column]'] = sortColumnName; // Send column name instead of index
+        requestData['order[0][column]'] = sortColumnName; // Send column data property name
         requestData['order[0][dir]'] = state.sort.direction;
     }
 
@@ -158,6 +206,43 @@
     });
 
     tbody.append(rows);
+  }
+
+  /**
+   * Renders the "Showing X to Y of Z" info and pagination buttons.
+   */
+  function renderPagingControls(container, options, state, response) {
+    const cn = options.classNames;
+    const recordsFiltered = response.recordsFiltered || 0;
+    const startRecord = recordsFiltered === 0 ? 0 : (state.currentPage * state.pageLength + 1);
+    const endRecord = Math.min(startRecord + state.pageLength - 1, recordsFiltered);
+
+    container.find(`.${cn.info}`).text(`Showing ${startRecord} to ${endRecord} of ${recordsFiltered} entries`);
+    
+    const pagingContainer = container.find(`.${cn.paging}`);
+    pagingContainer.empty();
+
+    const prevButton = J('<button>').addClass(cn.paginateBtn).data('page', 'previous').text('Previous');
+    const nextButton = J('<button>').addClass(cn.paginateBtn).data('page', 'next').text('Next');
+
+    if (state.currentPage === 0) prevButton.addClass(cn.disabled);
+    if (endRecord >= recordsFiltered) nextButton.addClass(cn.disabled);
+    
+    pagingContainer.append(prevButton).append(nextButton);
+  }
+
+  /**
+   * Updates table headers to show the current sort direction (asc/desc classes).
+   */
+  function renderHeaderSortUI(container, options, state) {
+    const cn = options.classNames;
+    container.find(`th.${cn.sortable}`).each(function() {
+      const th = J(this);
+      th.removeClass(`${cn.sortingAsc} ${cn.sortingDesc}`);
+      if (parseInt(th.data('columnIndex')) === state.sort.columnIndex) {
+        th.addClass(state.sort.direction === 'asc' ? cn.sortingAsc : cn.sortingDesc);
+      }
+    });
   }
 
   // --- MAIN PLUGIN DEFINITION ---
@@ -231,82 +316,5 @@
       }
     });
   };
-
-  // Attach other helper functions that don't need to be in the main scope
-  const wireUpEventListeners = (container, options) => { /* ... same as before ... */ };
-  const renderPagingControls = (container, options, state, response) => { /* ... same as before ... */ };
-  const renderHeaderSortUI = (container, options, state) => { /* ... same as before ... */ };
-
-  // Paste the unchanged helper functions here
-  function wireUpEventListeners(container, options) {
-    const cn = options.classNames;
-
-    if (options.ordering) {
-      container.on('click', `th.${cn.sortable}`, function() {
-        const columnIndex = parseInt(J(this).data('columnIndex'));
-        const state = JSON.parse(container.data('coreTableState'));
-        if (state.sort.columnIndex === columnIndex) {
-          state.sort.direction = state.sort.direction === 'asc' ? 'desc' : 'asc';
-        } else {
-          state.sort.columnIndex = columnIndex;
-          state.sort.direction = 'asc';
-        }
-        container.data('coreTableState', JSON.stringify(state));
-        fetchData(container, options);
-      });
-    }
-
-    if (options.searching) {
-      const debouncedSearch = debounce(function() {
-        const state = JSON.parse(container.data('coreTableState'));
-        state.searchTerm = this.value;
-        state.currentPage = 0;
-        container.data('coreTableState', JSON.stringify(state));
-        fetchData(container, options);
-      }, 400);
-      container.on('keyup', `.${cn.search} input`, debouncedSearch);
-    }
-
-    if (options.paging) {
-      container.on('click', `.${cn.paginateBtn}`, function() {
-        const button = J(this);
-        if (button.hasClass(cn.disabled)) return;
-        const state = JSON.parse(container.data('coreTableState'));
-        if (button.data('page') === 'next') state.currentPage++;
-        else if (button.data('page') === 'previous') state.currentPage--;
-        container.data('coreTableState', JSON.stringify(state));
-        fetchData(container, options);
-      });
-    }
-  }
-  function renderPagingControls(container, options, state, response) {
-    const cn = options.classNames;
-    const recordsFiltered = response.recordsFiltered || 0;
-    const startRecord = recordsFiltered === 0 ? 0 : (state.currentPage * state.pageLength + 1);
-    const endRecord = Math.min(startRecord + state.pageLength - 1, recordsFiltered);
-
-    container.find(`.${cn.info}`).text(`Showing ${startRecord} to ${endRecord} of ${recordsFiltered} entries`);
-    
-    const pagingContainer = container.find(`.${cn.paging}`);
-    pagingContainer.empty();
-
-    const prevButton = J('<button>').addClass(cn.paginateBtn).data('page', 'previous').text('Previous');
-    const nextButton = J('<button>').addClass(cn.paginateBtn).data('page', 'next').text('Next');
-
-    if (state.currentPage === 0) prevButton.addClass(cn.disabled);
-    if (endRecord >= recordsFiltered) nextButton.addClass(cn.disabled);
-    
-    pagingContainer.append(prevButton).append(nextButton);
-  }
-  function renderHeaderSortUI(container, options, state) {
-    const cn = options.classNames;
-    container.find(`th.${cn.sortable}`).each(function() {
-      const th = J(this);
-      th.removeClass(`${cn.sortingAsc} ${cn.sortingDesc}`);
-      if (parseInt(th.data('columnIndex')) === state.sort.columnIndex) {
-        th.addClass(state.sort.direction === 'asc' ? cn.sortingAsc : cn.sortingDesc);
-      }
-    });
-  }
 
 }(window.J));
