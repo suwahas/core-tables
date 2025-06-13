@@ -2,7 +2,7 @@
  * CoreTables Plugin
  * A powerful, server-side datatable plugin for the core.js (J) library.
  *
- * @version 2.3.0
+ * @version 2.3.1
  * @plugin-name coreTable
  * @author https://github.com/suwahas
  * @requires core.js
